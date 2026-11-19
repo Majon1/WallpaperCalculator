@@ -209,6 +209,7 @@ function WallPanel({ room, wallIndex, openings }: { room: Room; wallIndex: numbe
   const wallpaperId = assignment?.wallpaperId ?? null;
   const paperArea = useEditor((s) => (assignment ? assignmentArea(s.project, assignment) : null));
   const rollWidth = useEditor((s) => s.project.wallpapers.find((w) => w.id === assignment?.wallpaperId)?.rollWidth);
+  const trim = useEditor((s) => s.project.trimPerEnd);
   const wall = getWalls(room)[wallIndex];
   if (!wall) return null;
   const onWall = openings.filter((o) => o.wallIndex === wallIndex);
@@ -313,6 +314,10 @@ function WallPanel({ room, wallIndex, openings }: { room: Room; wallIndex: numbe
         <StripList
           plan={stripPlan(wall.length, heights, leftIsStart, assignment.startHeight, rollWidth, onWall)}
           openings={onWall}
+          trim={trim}
+          extra={assignment.stripExtra}
+          onChange={(strip, extra) => actions.setStripExtra(room.id, wallIndex, strip, extra)}
+          onRemove={(strip, removed) => actions.setStripRemoved(room.id, wallIndex, strip, removed)}
         />
       )}
       <h3>Doors & windows</h3>
@@ -440,8 +445,25 @@ function OpeningPanel({ opening, room }: { opening: Opening; room: Room }) {
   );
 }
 
-/** Each strip of a wall (from the left corner) with the pieces it needs and what's saved behind cabinets etc. */
-function StripList({ plan, openings }: { plan: ReturnType<typeof stripPlan>; openings: Opening[] }) {
+/**
+ * Each strip of a wall (from the left corner): the pieces to cut, with trim, and what's saved behind cabinets etc.
+ * The top piece's length can be changed by hand (stored as the difference to the calculated length).
+ */
+function StripList({
+  plan,
+  openings,
+  trim,
+  extra,
+  onChange,
+  onRemove,
+}: {
+  plan: ReturnType<typeof stripPlan>;
+  openings: Opening[];
+  trim: number;
+  extra: Record<string, number | null>;
+  onChange: (strip: number, extra: number | null) => void;
+  onRemove: (strip: number, removed: boolean) => void;
+}) {
   /** "cut around window, door" for openings that cover only part of the strip. */
   const cutText = (st: (typeof plan)[number]) => {
     const names = [
@@ -453,40 +475,102 @@ function StripList({ plan, openings }: { plan: ReturnType<typeof stripPlan>; ope
     ];
     return names.length ? `cut around ${names.join(', ')}` : null;
   };
-  const total = plan.reduce((sum, st) => sum + rangeLength(st.pieces), 0);
+  const cut = (pc: { from: number; to: number }) => pc.to - pc.from + 2 * trim;
+  const removed = (st: (typeof plan)[number]) => extra[String(st.index)] === null;
+  const extraOf = (st: (typeof plan)[number]) => extra[String(st.index)] ?? 0;
+  const total = plan.reduce(
+    (sum, st) =>
+      removed(st) ? sum : sum + st.pieces.reduce((s2, pc) => s2 + cut(pc), 0) + (st.pieces.length ? extraOf(st) : 0),
+    0,
+  );
   const saved = plan.reduce((sum, st) => sum + rangeLength(st.saved), 0);
   return (
     <>
       <h3>Strips</h3>
       <ul className="list strips">
-        {plan.map((st) => (
-          <li key={st.index}>
-            <span>
-              Strip {st.index + 1}
-              {st.right - st.left < plan[0].right - plan[0].left - 0.5 && (
-                <span className="muted small"> ({formatLength(st.right - st.left)} wide)</span>
-              )}
-            </span>
-            <span className="strip-pieces">
-              {st.pieces.length === 0 ? (
-                <span className="muted">none</span>
-              ) : (
-                st.pieces.map((pc) => formatLength(pc.to - pc.from)).join(' + ')
-              )}
-              {st.saved.length > 0 && <span className="saved small"> · {formatLength(rangeLength(st.saved))} saved</span>}
-              {cutText(st) && <span className="cut small"> · {cutText(st)}</span>}
-            </span>
-          </li>
-        ))}
+        {plan.map((st) => {
+          const own = extraOf(st);
+          const top = st.pieces[st.pieces.length - 1];
+          if (removed(st)) {
+            return (
+              <li key={st.index} className="strip-removed">
+                <span>
+                  Strip {st.index + 1}
+                  <span className="muted small"> ({formatLength(st.right - st.left)} wide)</span>
+                </span>
+                <span className="strip-pieces">
+                  <span className="muted">removed</span>
+                  <button className="link reset" title="Bring this strip back" onClick={() => onRemove(st.index, false)}>
+                    ↺
+                  </button>
+                </span>
+              </li>
+            );
+          }
+          return (
+            <li key={st.index}>
+              <span>
+                Strip {st.index + 1}
+                {st.right - st.left < plan[0].right - plan[0].left - 0.5 && (
+                  <span className="muted small"> ({formatLength(st.right - st.left)} wide)</span>
+                )}
+              </span>
+              <span className="strip-pieces">
+                {!top ? (
+                  <span className="muted">none</span>
+                ) : (
+                  <>
+                    {st.pieces.slice(0, -1).map((pc) => `${formatLength(cut(pc))} + `)}
+                    <span className={`strip-length${own ? ' edited' : ''}`}>
+                      <LengthInput
+                        ariaLabel={`Strip ${st.index + 1} length`}
+                        value={cut(top) + own}
+                        min={10}
+                        max={100_000}
+                        onCommit={(len) => onChange(st.index, Math.round((len - cut(top)) * 10) / 10 || null)}
+                      />
+                      {own !== 0 && (
+                        <button
+                          className="link reset"
+                          title={`Back to the calculated length (${formatLength(cut(top))})`}
+                          onClick={() => onChange(st.index, null)}
+                        >
+                          ↺
+                        </button>
+                      )}
+                    </span>
+                  </>
+                )}
+                <button
+                  className="link remove-strip"
+                  title="Remove this strip: no paper is cut for it (e.g. a narrow sliver you cover by stretching the next strip)"
+                  onClick={() => onRemove(st.index, true)}
+                >
+                  ×
+                </button>
+                {own !== 0 && (
+                  <span className="edited-note small">
+                    {own > 0 ? '+' : '−'}
+                    {formatLength(Math.abs(own))} by hand
+                  </span>
+                )}
+                {st.saved.length > 0 && <span className="saved small"> · {formatLength(rangeLength(st.saved))} saved</span>}
+                {cutText(st) && <span className="cut small"> · {cutText(st)}</span>}
+              </span>
+            </li>
+          );
+        })}
         <li className="total">
           <strong>Paper</strong>
           <strong>{formatLength(total)}</strong>
         </li>
       </ul>
       <p className="note">
-        {saved >= 0.5
-          ? `Where a cabinet, door or window covers a strip's whole width, the strip is cut there: ${formatLength(saved)} of paper isn't needed on this wall and can be used elsewhere.`
-          : 'Lengths from the bottom of the wallpaper to the ceiling. A strip is only cut short where something covers its whole width.'}
+        Lengths to cut, including {formatLength(trim)} trim at each end. Type a new length to make a strip longer or
+        shorter (it changes the top piece, at the ceiling); ↺ goes back to the calculated length. × removes a strip you
+        don't need, e.g. a narrow sliver at a corner.
+        {saved >= 0.5 &&
+          ` Where a cabinet, door or window covers a strip's whole width, the strip is cut there: ${formatLength(saved)} of paper isn't needed on this wall.`}
       </p>
     </>
   );

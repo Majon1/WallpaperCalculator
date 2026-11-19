@@ -288,13 +288,43 @@ export const actions = {
       // Changing the wallpaper keeps where it starts and stops on that wall.
       const placementOf = (wallIndex: number) => {
         const a = p.wallpaperAssignments.find((x) => x.roomId === roomId && x.wallIndex === wallIndex);
-        return { startHeight: a?.startHeight ?? 0 };
+        // same wall, same strips: keep where it starts and the lengths changed by hand
+        return { startHeight: a?.startHeight ?? 0, stripExtra: a?.stripExtra ?? {} };
       };
       const added = wallpaperId
         ? wallIndexes.map((wallIndex) => ({ roomId, wallIndex, wallpaperId, ...placementOf(wallIndex) }))
         : [];
       return { ...p, wallpaperAssignments: [...others, ...added] };
     });
+  },
+
+  /** Cutting plan arranged by hand (piece keys per roll), or null to calculate the best cuts automatically again. */
+  setManualPlan(wallpaperId: Id, manualPlan: string[][] | null) {
+    commit((p) => ({ ...p, wallpapers: p.wallpapers.map((w) => (w.id === wallpaperId ? { ...w, manualPlan } : w)) }));
+  },
+
+  /** Remove a strip (no paper is cut for it), or bring it back. */
+  setStripRemoved(roomId: Id, wallIndex: number, stripIndex: number, removed: boolean) {
+    commit((p) => ({
+      ...p,
+      wallpaperAssignments: p.wallpaperAssignments.map((a) => {
+        if (a.roomId !== roomId || a.wallIndex !== wallIndex) return a;
+        const { [String(stripIndex)]: _old, ...rest } = a.stripExtra;
+        return { ...a, stripExtra: removed ? { ...rest, [String(stripIndex)]: null } : rest };
+      }),
+    }));
+  },
+
+  /** Change a strip's length by hand (mm added to its top piece); null or 0 = back to the calculated length. */
+  setStripExtra(roomId: Id, wallIndex: number, stripIndex: number, extra: number | null) {
+    commit((p) => ({
+      ...p,
+      wallpaperAssignments: p.wallpaperAssignments.map((a) => {
+        if (a.roomId !== roomId || a.wallIndex !== wallIndex) return a;
+        const { [String(stripIndex)]: _old, ...rest } = a.stripExtra;
+        return { ...a, stripExtra: extra ? { ...rest, [String(stripIndex)]: extra } : rest };
+      }),
+    }));
   },
 
   /** Height above the floor where the wallpaper starts, on walls that have wallpaper. */

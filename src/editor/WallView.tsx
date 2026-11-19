@@ -99,6 +99,7 @@ function WallElevation({ room, wallIndex, openings }: { room: Room; wallIndex: n
   );
   /** Height above the floor where the wallpaper starts. */
   const paperFrom = assignment?.startHeight ?? 0;
+  const trim = useEditor((st) => st.project.trimPerEnd);
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const dragRef = useRef<Drag | null>(null);
@@ -220,7 +221,9 @@ function WallElevation({ room, wallIndex, openings }: { room: Room; wallIndex: n
   ).filter((x) => x.piece.roomId === room.id && x.piece.wallIndex === wallIndex);
   // Which parts of each strip are needed, and which are covered across the whole strip width (saved).
   const plan = wallpaper ? stripPlan(L, heights, leftIsStart, paperFrom, wallpaper.rollWidth, openings) : [];
-  const paperLength = plan.reduce((sum, st) => sum + rangeLength(st.pieces), 0);
+  const isRemoved = (strip: number) => assignment?.stripExtra[String(strip)] === null;
+  const removedCount = plan.filter((st) => isRemoved(st.index)).length;
+  const paperLength = plan.reduce((sum, st) => (isRemoved(st.index) ? sum : sum + rangeLength(st.pieces)), 0);
   const savedLength = plan.reduce((sum, st) => sum + rangeLength(st.saved), 0);
 
   const renderOpening = (o: Opening) => {
@@ -293,8 +296,41 @@ function WallElevation({ room, wallIndex, openings }: { room: Room; wallIndex: n
       { from: top, to: ceiling, kind: 'gap' },
     ].filter((sg) => sg.to - sg.from > 0.5);
     const selected = o.id === selectedId;
+    // Sloped ceiling: the distance from the top of the opening to the ceiling differs at its two edges,
+    // so measure straight up from both top corners.
+    const openingTop = o.sillHeight + o.height;
+    const toCeiling = sloped
+      ? [
+          { x: xa, along: leftIsStart ? o.offset : o.offset + o.width, inward: 1 },
+          { x: xb, along: leftIsStart ? o.offset + o.width : o.offset, inward: -1 },
+        ]
+          .map((e) => ({ ...e, gap: ceilAt(e.along) - openingTop }))
+          .filter((e) => e.gap > 0.5)
+      : [];
     return (
       <g key={`h-${o.id}`} className={`elev-dims${selected ? ' highlight' : ''}`}>
+        {toCeiling.map((e) => {
+          const y1 = Y(ceilAt(e.along));
+          const y2 = Y(openingTop);
+          return (
+            <g key={`c-${e.x}`} className="edim to-ceiling">
+              <line className="edim-line" x1={e.x} y1={y1} x2={e.x} y2={y2} />
+              <line className="edim-tick" x1={e.x - TICK} y1={y1 + TICK} x2={e.x + TICK} y2={y1 - TICK} />
+              <line className="edim-tick" x1={e.x - TICK} y1={y2 + TICK} x2={e.x + TICK} y2={y2 - TICK} />
+              {y2 - y1 >= 12 && (
+                <text
+                  className="edim-label"
+                  x={e.x + e.inward * 4}
+                  y={(y1 + y2) / 2}
+                  textAnchor={e.inward > 0 ? 'start' : 'end'}
+                  dominantBaseline="middle"
+                >
+                  {formatLength(e.gap)}
+                </text>
+              )}
+            </g>
+          );
+        })}
         {segs.map((sg) => (
           <VDim
             key={sg.from}
@@ -340,7 +376,7 @@ function WallElevation({ room, wallIndex, openings }: { room: Room; wallIndex: n
           {strips && (
             <>
               {' '}
-              · {strips.count} strips
+              · {strips.count} strips{removedCount > 0 && <> ({removedCount} removed)</>}
               {strips.lastWidth < wallpaper!.rollWidth - 0.5 && <>, last {formatLength(strips.lastWidth)}</>}
               {' '}
               · paper {formatLength(paperLength)}
@@ -448,9 +484,10 @@ function WallElevation({ room, wallIndex, openings }: { room: Room; wallIndex: n
                     // the pattern starts at the bottom of the strip. Lines are clipped to the wall.
                     const stripTop = Math.min(ceilY(x1), ceilY(x2));
                     const stripLength = Math.max(0, (yPaper - stripTop) / s);
-                    const repeats = patternStartHeights(stripLength, wallpaper.patternRepeat, wallpaper.match, i).map(
-                      (z) => paperFrom + z,
-                    );
+                    // The pattern starts at the bottom of the cut, one trim below where the paper starts.
+                    const repeats = patternStartHeights(stripLength + trim, wallpaper.patternRepeat, wallpaper.match, i)
+                      .map((z) => paperFrom - trim + z)
+                      .filter((z) => z >= paperFrom - 0.5);
                     const yTopAtCentre = ceilY(cx);
                     return (
                       <g key={i}>
@@ -526,6 +563,31 @@ function WallElevation({ room, wallIndex, openings }: { room: Room; wallIndex: n
                   );
                 }),
               )}
+
+              {/* strips removed by hand: no paper there */}
+              {wallpaper &&
+                assignment &&
+                plan
+                  .filter((st) => assignment.stripExtra[String(st.index)] === null)
+                  .map((st) => {
+                    const xa = stripX(st.left);
+                    const xb = stripX(st.right);
+                    const yt = Math.min(ceilY(xa), ceilY(xb));
+                    return (
+                      <g key={`removed-${st.index}`} className="elev-removed" clipPath={`url(#${clipId})`}>
+                        <rect x={xa} y={yt} width={xb - xa} height={yPaper - yt} />
+                        {xb - xa >= 12 && (
+                          <text
+                            transform={`translate(${(xa + xb) / 2} ${(yt + yPaper) / 2}) rotate(-90)`}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                          >
+                            removed
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
 
               {/* which roll each piece comes from */}
               {wallpaper &&

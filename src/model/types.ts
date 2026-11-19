@@ -60,6 +60,11 @@ export interface Wallpaper {
    * first cut). Unknown / not checked = false.
    */
   rollStartsAtPattern: boolean;
+  /**
+   * Cutting plan arranged by hand in the Rolls view: rolls, each a list of piece keys in cutting order
+   * (`pieceKey` in src/calc/wallpaperRolls.ts). null = calculated automatically.
+   */
+  manualPlan: string[][] | null;
   /** In the project currency. null = unknown. */
   pricePerRoll: number | null;
 }
@@ -71,10 +76,16 @@ export interface WallpaperAssignment {
   wallpaperId: Id;
   /** Height above the floor where the wallpaper starts (e.g. above tiles or panelling). 0 = from the floor. */
   startHeight: number;
+  /**
+   * Strips changed by hand: strip number (0 = first from the left corner, as a string key) →
+   * a length added to the strip's top piece (mm, may be negative), or null = strip removed (no paper is cut for it,
+   * e.g. a narrow sliver covered by stretching the next strip). Missing = as calculated.
+   */
+  stripExtra: Record<string, number | null>;
 }
 
 export interface Project {
-  version: 9;
+  version: 13;
   name: string;
   /** Symbol shown next to prices, e.g. "€". */
   currency: string;

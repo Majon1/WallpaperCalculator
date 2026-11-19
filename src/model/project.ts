@@ -60,20 +60,22 @@ export function newWallpaper(id: string, existing: Wallpaper[]): Wallpaper {
     rollLength: preset.rollLength,
     patternRepeat: 0,
     match: 'free',
-    rollStartsAtPattern: false,
+    // Most rolls start at a pattern start; untick in the wallpaper panel when yours don't.
+    rollStartsAtPattern: true,
+    manualPlan: null,
     pricePerRoll: null,
   };
 }
 
 // ---------- project ----------
 
-export const CURRENT_VERSION = 9;
+export const CURRENT_VERSION = 13;
 
 /** Default trim allowance per cut end: 5 cm. */
 export const DEFAULT_TRIM_PER_END = 50;
 
 export const emptyProject = (): Project => ({
-  version: 9,
+  version: 13,
   name: 'My home',
   currency: '€',
   trimPerEnd: DEFAULT_TRIM_PER_END,
@@ -135,6 +137,9 @@ function isWallpaper(v: unknown): v is Wallpaper {
     v.patternRepeat >= 0 &&
     (v.match === 'free' || v.match === 'straight' || v.match === 'offset') &&
     typeof v.rollStartsAtPattern === 'boolean' &&
+    (v.manualPlan === null ||
+      (Array.isArray(v.manualPlan) &&
+        v.manualPlan.every((roll) => Array.isArray(roll) && roll.every((k) => typeof k === 'string')))) &&
     (v.pricePerRoll === null || (isNum(v.pricePerRoll) && v.pricePerRoll >= 0))
   );
 }
@@ -146,7 +151,10 @@ function isAssignment(v: unknown): v is WallpaperAssignment {
     Number.isInteger(v.wallIndex) &&
     typeof v.wallpaperId === 'string' &&
     isNum(v.startHeight) &&
-    v.startHeight >= 0
+    v.startHeight >= 0 &&
+    isObj(v.stripExtra) &&
+    !Array.isArray(v.stripExtra) &&
+    Object.entries(v.stripExtra).every(([k, x]) => /^\d+$/.test(k) && (x === null || isNum(x)))
   );
 }
 
@@ -253,6 +261,32 @@ export function migrateProject(v: unknown): Project | null {
       ? v.wallpapers.map((w) => (isObj(w) ? { ...w, rollStartsAtPattern: false } : w))
       : v.wallpapers;
     v = { ...v, version: 9, wallpapers };
+  }
+  if (isObj(v) && (v.version === 9 || v.version === 10)) {
+    // v11: version 10 briefly stored cutting plans arranged by hand (`manualPlan`); that feature was removed and
+    // plans are always calculated, so the field is dropped. Version 9 has nothing to change.
+    const wallpapers = Array.isArray(v.wallpapers)
+      ? v.wallpapers.map((w) => {
+          if (!isObj(w)) return w;
+          const { manualPlan: _dropped, ...rest } = w;
+          return rest;
+        })
+      : v.wallpapers;
+    v = { ...v, version: 11, wallpapers };
+  }
+  if (isObj(v) && v.version === 11) {
+    // v12: strip lengths can be changed by hand. Existing strips keep their calculated length.
+    const wallpaperAssignments = Array.isArray(v.wallpaperAssignments)
+      ? v.wallpaperAssignments.map((a) => (isObj(a) ? { ...a, stripExtra: {} } : a))
+      : v.wallpaperAssignments;
+    v = { ...v, version: 12, wallpaperAssignments };
+  }
+  if (isObj(v) && v.version === 12) {
+    // v13: cutting plans arranged by hand (again). Existing wallpapers are calculated automatically.
+    const wallpapers = Array.isArray(v.wallpapers)
+      ? v.wallpapers.map((w) => (isObj(w) ? { ...w, manualPlan: null } : w))
+      : v.wallpapers;
+    v = { ...v, version: 13, wallpapers };
   }
   return isProject(v) ? v : null;
 }

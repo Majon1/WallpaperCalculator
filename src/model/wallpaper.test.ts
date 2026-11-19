@@ -144,10 +144,10 @@ describe('assignmentArea', () => {
         { id: 'x', roomId: 'r', wallIndex: 1, type: 'window' as const, offset: 0, width: 1000, height: 1000, sillHeight: 1000 },
       ],
     };
-    expect(assignmentArea(project, { roomId: 'r', wallIndex: 0, wallpaperId: 'w', startHeight: 0 })).toBe(8_000_000);
+    expect(assignmentArea(project, { roomId: 'r', wallIndex: 0, wallpaperId: 'w', startHeight: 0, stripExtra: {} })).toBe(8_000_000);
     // wall 1 is 3 m: paper from 0.5 m = 3 x 2 m, minus the 1 x 1 m window
-    expect(assignmentArea(project, { roomId: 'r', wallIndex: 1, wallpaperId: 'w', startHeight: 500 })).toBe(5_000_000);
-    expect(assignmentArea(project, { roomId: 'r', wallIndex: 9, wallpaperId: 'w', startHeight: 0 })).toBe(0);
+    expect(assignmentArea(project, { roomId: 'r', wallIndex: 1, wallpaperId: 'w', startHeight: 500, stripExtra: {} })).toBe(5_000_000);
+    expect(assignmentArea(project, { roomId: 'r', wallIndex: 9, wallpaperId: 'w', startHeight: 0, stripExtra: {} })).toBe(0);
   });
 });
 

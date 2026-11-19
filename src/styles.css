@@ -1210,3 +1210,138 @@ input.invalid {
 .roll-cut-label.align {
   fill: var(--muted);
 }
+
+.wall-view-header.rolls-header {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.rolls-header .wall-view-info {
+  min-width: 260px;
+}
+
+/* strip lengths changed by hand */
+.list.strips li {
+  align-items: center;
+}
+.strip-length {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.strip-length .commit-input input {
+  width: 58px;
+  padding: 1px 4px;
+  text-align: right;
+}
+.strip-length.edited .commit-input input {
+  border-color: var(--accent, #2f6fdb);
+  background: rgba(47, 111, 219, 0.07);
+  font-weight: 600;
+}
+.strip-length .reset {
+  font-size: 14px;
+  padding: 0 2px;
+}
+.edited-note {
+  display: block;
+  color: var(--accent, #2f6fdb);
+}
+
+/* strips removed by hand */
+.remove-strip {
+  color: var(--muted);
+  font-size: 15px;
+  padding: 0 3px;
+}
+.remove-strip:hover {
+  color: var(--danger);
+}
+.list.strips li.strip-removed {
+  opacity: 0.6;
+}
+.elev-removed rect {
+  fill: #f4f5f7;
+  stroke: #c3c9d1;
+  stroke-dasharray: 3 3;
+}
+.elev-removed {
+  pointer-events: none;
+}
+.elev-removed text {
+  font-size: 10px;
+  fill: var(--muted);
+  font-style: italic;
+}
+
+/* top of an opening to a sloped ceiling */
+.edim.to-ceiling .edim-line,
+.edim.to-ceiling .edim-tick {
+  stroke: var(--accent, #2f6fdb);
+}
+.edim.to-ceiling .edim-label {
+  fill: var(--accent, #2f6fdb);
+  font-weight: 600;
+}
+
+/* moving pieces in the rolls view */
+.roll-piece-group {
+  cursor: grab;
+}
+svg.dragging,
+svg.dragging .roll-piece-group {
+  cursor: grabbing;
+}
+.roll-piece-group.lifted {
+  opacity: 0.3;
+}
+.roll-ghost rect {
+  fill: var(--accent, #2f6fdb);
+  opacity: 0.55;
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+.roll-ghost text {
+  font-size: 10.5px;
+  font-weight: 700;
+  fill: #fff;
+}
+.roll-drop-marker {
+  stroke: var(--accent, #2f6fdb);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.roll-new rect {
+  fill: none;
+  stroke: #c3c9d1;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.roll-new.on rect {
+  stroke: var(--accent, #2f6fdb);
+  fill: rgba(47, 111, 219, 0.06);
+}
+.roll-new text {
+  font-size: 11px;
+  fill: var(--muted);
+}
+.roll-col.too-long .roll-col-outline {
+  stroke: var(--danger);
+  stroke-width: 2.5;
+}
+.roll-col-foot.over {
+  fill: var(--danger);
+  font-weight: 700;
+}
+.manual-plan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.manual-plan button {
+  padding: 2px 8px;
+}
+.manual-plan.outdated {
+  color: var(--danger);
+}

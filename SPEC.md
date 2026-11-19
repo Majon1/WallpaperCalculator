@@ -54,7 +54,7 @@ Project  { version: 7, name, currency, rooms, openings, wallpapers, wallpaperAss
 - **Drag wall**: moves the wall perpendicular to itself; neighbouring walls stretch.
 - **Drag corner / room / opening**: grid snap 10 cm (Shift: 1 cm). Openings slide along their wall.
 - **Measurements**: when a wall or an opening is selected, a measurement chain is drawn along the inside of that wall: corner → opening → gap → opening → … → corner (`wallDimensionChain`). Openings are clamped to the wall and overlaps never produce negative gaps; zero gaps are omitted. The distances to the neighbours of the selected opening are highlighted.
-- **Wall view** (elevation): clicking a wall opens a pane below the plan showing that wall head-on **as seen from inside the room** (`wallStartIsOnLeft` decides which corner is on the left). It shows the wall (length × height, with a sloped top if the ends differ), its openings to scale, the horizontal measurement chain, total length, wall height, and for each opening the vertical chain floor → bottom → top → ceiling (ceiling measured on the side the chain is drawn). A sloped wall shows both end heights. Openings can be dragged sideways (offset) and, except doors, up/down (sill height), in 1 cm steps, clamped to the wall. ‹ › step to the neighbouring walls.
+- **Wall view** (elevation): clicking a wall opens a pane below the plan showing that wall head-on **as seen from inside the room** (`wallStartIsOnLeft` decides which corner is on the left). It shows the wall (length × height, with a sloped top if the ends differ), its openings to scale, the horizontal measurement chain, total length, wall height, and for each opening the vertical chain floor → bottom → top → ceiling (ceiling measured on the side the chain is drawn). A sloped wall shows both end heights, and for every opening the distance from its top up to the ceiling at **both** of its top corners (straight up, highlighted), because on a slope they differ. Openings can be dragged sideways (offset) and, except doors, up/down (sill height), in 1 cm steps, clamped to the wall. ‹ › step to the neighbouring walls.
 - An opening's position can be entered either as distance from the wall start (`offset`) or distance to the wall end (`wall length − offset − width`).
 - Edits that would make a room invalid are rejected.
 - Undo/redo for every change; the project autosaves to the browser and can be exported/imported as JSON.
@@ -100,7 +100,7 @@ How repeat and match affect quantities is defined in Part 3.
 - Wallpaper can be set per wall (wall panel, wall view) or for all walls of a room at once (room panel).
 - Deleting a wallpaper removes its assignments; deleting a room removes its assignments.
 - **Strip preview** (wall view): a papered wall is divided into vertical strips of `rollWidth`, starting from the **left corner as seen from inside the room** (`stripLayout` in `src/model/wallpaper.ts`). Strips run from `startHeight` up to the ceiling; the start is drawn as a line with a height dimension on the left. Seams are drawn as dashed lines, strips are numbered, and a narrower last strip shows its width. The header shows the strip count. A remainder under 0.5 mm counts as an exact fit. (Which corner to start from may become a setting in Part 3.)
-- **Pattern preview** (wall view): for `straight` and `offset` match with a repeat > 0, each strip shows where a pattern repeat starts (`patternStartHeights`). The pattern of strip 1 starts **at the bottom of the wallpaper** (`startHeight`; the floor by default) and repeats upwards every `patternRepeat`. Straight match: every strip the same. Offset (half-drop): every second strip (2, 4, …) is shifted up by half the repeat. Repeat starts at the ceiling (within 0.5 mm) are not shown. Under a sloped ceiling each strip runs up to its higher edge and the lines are clipped to the wall outline. Free match shows nothing. A "repeat" dimension is drawn on the right of the wall, from the bottom of the wallpaper.
+- **Pattern preview** (wall view): for `straight` and `offset` match with a repeat > 0, each strip shows where a pattern repeat starts (`patternStartHeights`). The pattern of strip 1 starts **at the bottom of the cut**: one trim (`trimPerEnd`) below the bottom of the wallpaper (`startHeight`; the floor by default). It repeats upwards every `patternRepeat`, so at the floor line the pattern is one trim into the motif, hidden behind the skirting. Lines below the wallpaper aren't drawn. Straight match: every strip the same. Offset (half-drop): every second strip (2, 4, …) is shifted up by half the repeat. Repeat starts at the ceiling (within 0.5 mm) are not shown. Under a sloped ceiling each strip runs up to its higher edge and the lines are clipped to the wall outline. Free match shows nothing. A "repeat" dimension is drawn on the right of the wall, from the bottom of the wallpaper.
 - Not yet: wallpaper that stops below the ceiling (e.g. under a border or dado rail), feature walls with different wallpaper per section.
 
 ### Project changes (version 2)
@@ -144,18 +144,20 @@ For each wallpaper assignment, `stripPlan` (Part 2) gives the strips of that wal
 - Openings that don't fit their wall (`openingProblems` not empty) are **ignored**, so paper is counted as if they weren't there. This errs on the side of buying enough.
 - A narrower last strip still uses a full-width piece of the roll. The leftover width is not reused.
 - A piece's **cut length** = piece length + 2 × `trimPerEnd`.
+- **Strip lengths changed by hand** (`WallpaperAssignment.stripExtra`, strip number → mm): the change is added to the cut length of the strip's **top** piece, the one reaching the ceiling. It may be negative, but a piece is never shorter than 1 cm (`MIN_CUT`). The pattern end phase follows the new length. Only the difference is stored, so the change stays when the calculated length changes, e.g. a different trim. Set in the wall panel's strip list (an input per strip, showing the cut length including trim; ↺ goes back to the calculated length). Changing which wallpaper a wall has keeps these changes.
+- **Strips removed by hand**: a `stripExtra` value of **null** removes the strip, so no piece is cut for it. This is for a narrow sliver, e.g. 8 cm at a corner, that is covered by stretching the next strip. It is set with × in the strip list and brought back with ↺. The wall view draws a removed strip without wallpaper and labelled "removed", and the header counts it ("13 strips (1 removed)") and leaves it out of the paper total. The net wallpapered area is not changed by this.
 
 ### Step 2 — where each piece sits in the pattern
 Let R = `patternRepeat`. For **free match** (or R = 0) there is no pattern: skip to step 3, every gap is 0.
 
 For **straight / offset match** every piece must show the pattern at the right height:
-- The pattern of strip *i* has its origin at `startHeight`, or `startHeight + R/2` for odd *i* (0-based) with offset (half-drop) match, as in the pattern preview.
+- The pattern of strip *i* has its origin at the **bottom of the cut**: `startHeight − trimPerEnd`, or that + R/2 for odd *i* (0-based) with offset (half-drop) match, as in the pattern preview. So a strip starting at the floor starts exactly at a pattern start (s = 0), and when rolls start at the pattern, nothing is cut off before it.
 - A piece's **cut** runs from (piece bottom − trim) to (piece top + trim).
 - Its **start phase** s = (cut bottom − origin) mod R and its **end phase** e = (s + cut length) mod R, both in [0, R). These say where in the repeat the cut starts and ends.
 
 ### Step 3 — cutting pieces from rolls
 A roll is cut piece after piece, and the pattern runs on continuously along the roll. After a cut that ends at phase e, the next cut must start at its own phase s. The paper in between is waste: **gap** = (s − e) mod R. It is 0 when the next piece starts exactly where the last one ended in the pattern. For example, the top of another strip can start where the piece cut for below a window stopped.
-- **Start of a roll**, for patterned paper. This depends on the wallpaper setting **`rollStartsAtPattern`** ("Rolls start at the start of the pattern", default off):
+- **Start of a roll**, for patterned paper. This depends on the wallpaper setting **`rollStartsAtPattern`** ("Rolls start at the start of the pattern"). It is **on for new wallpapers**; wallpapers from projects before version 9 were migrated with it off:
   - **Off** (not known where the pattern starts on a roll): one repeat is set aside to line up the first cut. Usable length = `rollLength − R`, and the first cut on a roll has no gap.
   - **On**: the pattern starts exactly at the roll start, which is phase 0. Usable length = `rollLength`, and the first cut has a gap of (s − 0) mod R, the paper up to its own start phase. Inserting a piece at the front of a roll changes that first gap, and this is included.
   - Free match: usable length = `rollLength`, no gaps.
@@ -172,12 +174,17 @@ A roll is cut piece after piece, and the pattern runs on continuously along the 
      - A branch is dropped as soon as it can't beat the best answer so far. It needs at least *rolls opened so far* rolls, and at least ceil(total cut length of all pieces / usable length) rolls.
      - The search stops when it reaches that lower bound, or after 200 000 steps, and keeps the best answer found.
   4. Among answers with the same number of rolls, the first one found is kept, so the result is deterministic.
-  5. **Balance** (`balanceRolls`): with the number of rolls fixed, spread the spare paper so that no roll is cut to the last centimetre. This leaves room for a mistake on every roll.
-     - Repeatedly take the fullest roll, i.e. the one with the most length used.
-     - Try moving one of its pieces to another roll, or swapping one of its pieces with one from another roll. The pieces on a changed roll are put back in order longest first, each at its best position.
-     - Keep the change that makes the fullest roll least full, provided every roll still fits. When that stays the same, keep the one that makes the rolls more even: a smaller sum of the squared lengths used.
+  5. **Gather the spare paper on one roll** (`gatherLeftover`): with the number of rolls fixed, make the **largest leftover** as long as possible. One long leftover can still give an extra strip; short ends on every roll can't.
+     - Repeatedly take the roll with the most spare paper. Try moving one of its pieces to another roll, or swapping one of its pieces with one from another roll. Each changed roll is re-ordered: longest first, each piece at its best position.
+     - Keep the change that makes the largest leftover longest, provided every roll still fits. On a tie, keep the one that uses the least paper in total. A roll is never emptied here.
      - Stop when nothing improves, or after 500 rounds.
+     - The leftover is always at the top end of the roll, after the last piece. That piece and the leftover can be kept together as one length until it's clear whether an extra strip is needed.
   - For free match all gaps are 0, so this is a bin-packing search.
+- **Arranged by hand** (`Wallpaper.manualPlan`, `applyManualPlan`): in the Rolls view, pieces can be dragged to another roll, to another place in a roll's cutting order, or to the empty column at the end, which starts a new roll. The plan is stored as rolls of **piece keys** (`pieceKey`: room, wall, strip and the piece's bottom height to the mm) and followed instead of the search above. Gaps are still calculated for the order given.
+  - It is followed as far as it still matches the pieces. Keys of pieces that no longer exist are dropped (e.g. a removed strip). Pieces it doesn't list (new ones) are added where they add the least waste and fit, otherwise on a new roll. Empty rolls are dropped. The header says how many pieces were dropped or added.
+  - If not a single key matches any more, the plan is calculated automatically and this is shown.
+  - A roll whose pieces need more than its usable length is kept and marked: it is drawn red, shows "x cm too long", and gets a problem "Roll n is x cm too short for its pieces". Nothing is moved automatically.
+  - "Back to automatic" sets `manualPlan` to null. Every change goes through undo.
 - A piece whose cut length (plus its first gap, if the roll start is known) is greater than the usable roll length can't be cut. It is reported as a problem ("strip longer than a roll") and left out of the count.
 - **No spare roll** is added.
 
@@ -201,19 +208,29 @@ A roll is cut piece after piece, and the pattern runs on continuously along the 
 Wallpaper 53 cm × 1005 cm, trim 5 cm per end, repeat R = 64 cm where patterned. Room 400 × 300 cm with all four walls papered and no openings: 28 strips (8 + 6 + 8 + 6).
 - **Height 260 cm** (cut 270 cm):
   - Free match: 3 strips per roll (810 ≤ 1005) → **10 rolls**.
-  - Straight: s = (−5) mod 64 = 59 and e = (59 + 270) mod 64 = 9, so the gap between strips is 50. One roll holds 270 + 320 + 320 = 910 ≤ 941 → 3 strips per roll → **10 rolls**. Rounding every strip up to whole repeats would have given 14.
-  - Half-drop: even strips s = 59, odd strips s = 27. Alternating them gives gaps of 18 → still 3 per roll → **10 rolls**.
-- **Height 300 cm** (cut 310 cm), straight: e = 49, so the gap between strips is 10. One roll holds 310 + 320 = 630, and a third strip doesn't fit (950 > 941) → 2 per roll → **14 rolls**, with 311 cm left over on each.
-  - Add a **door** 90 × 210 cm covering strip 2 of wall 1 fully. That strip becomes one piece, 210–300, cut 205–305 = 100 cm, s = 205 mod 64 = 13. On a roll holding 2 strips (e = 49) its gap is (13 − 49) mod 64 = 28, and 630 + 28 + 100 = 758 ≤ 941. It fits a leftover, and the total drops to 27 full strips → **14 rolls** (13 rolls of 2, plus 1 roll with 1 strip and the door piece).
+  - Straight: s = 0 and e = 270 mod 64 = 14, so the gap between strips is 50. One roll holds 270 + 320 + 320 = 910 ≤ 941 → 3 strips per roll → **10 rolls**. Rounding every strip up to whole repeats would have given 14.
+  - Half-drop: even strips s = 0, odd strips s = 32. Alternating them gives gaps of 18 → still 3 per roll → **10 rolls**.
+- **Height 300 cm** (cut 310 cm), straight: e = 54, so the gap between strips is 10. One roll holds 310 + 320 = 630, and a third strip doesn't fit (950 > 941) → 2 per roll → **14 rolls**, with 311 cm left over on each.
+  - Add a **door** 90 × 210 cm covering strip 2 of wall 1 fully. That strip becomes one piece, 210–300, cut 205–305 = 100 cm, s = (205 − (−5)) mod 64 = 18. On a roll holding 2 strips (e = 54) its gap is (18 − 54) mod 64 = 28, and 630 + 28 + 100 = 758 ≤ 941. It fits a leftover, and the total drops to 27 full strips → **14 rolls** (13 rolls of 2, plus 1 roll with 1 strip and the door piece).
 - **Mixing long and short strips** (a sloped ceiling), free match: cut lengths 400, 400, 300, 300, 300, 300 cm. Greedy puts 400 + 400 on one roll; the 300s fill a second roll with three, and the last one needs a third roll. Filling rolls one at a time (or the search) finds 400 + 300 + 300 = 1000 ≤ 1005 twice → **2 rolls**.
-- **Rolls starting at the pattern**, height 292 cm, straight (cut 302 cm, s = 59, e = 41, gap 18 between strips). Three strips need 302 + 320 + 320 = 942 cm.
+- **Rolls starting at the pattern**, height 292 cm, straight (cut 302 cm, s = 0, e = 46, gap 18 between strips). Three strips need 302 + 320 + 320 = 942 cm.
   - Setting off: usable 941 → 2 per roll → **14 rolls**.
-  - Setting on: 59 to reach the first strip's phase + 942 = 1001 ≤ 1005 → 3 per roll → **10 rolls**.
-- **Balancing:** free match, pieces 400, 300, 300 and 200 cm packed as [400 + 300 + 300 = 1000] and [200]. That leaves 5 cm on one roll and 805 cm on the other. Moving the 400 gives 600 and 600, so 405 cm is left on each, still with **2 rolls**.
-- **Matching halves:** a piece below a window from 0–90 cm is cut −5–95 = 100 cm, from s = 59 to e = 31. A piece whose cut starts at phase 31, such as above an opening 228 cm high, follows it with **no gap**. A piece above a 210 cm door starts at 13, so 46 cm is lost between them.
+  - Setting on: the first strip starts right at the roll start, 942 ≤ 1005 → 3 per roll → **10 rolls**.
+- **Gathering the spare paper:** free match, packed as [500 + 400] (105 left) and [600 + 100] (305 left). Moving the 100 gives [500 + 400 + 100] and [600], so one roll has **405** left. Swapping works too: [700 + 200] and [400 + 300] become [700 + 300] and [400 + 200], again with 405 left on one roll.
+- **Matching halves:** a piece below a window from 0–90 cm is cut −5–95 = 100 cm, from s = 0 to e = 36. A piece whose cut starts at phase 36, such as above an opening 228 cm high, follows it with **no gap**. A piece above a 210 cm door starts at 18, so 46 cm is lost between them.
 
 ### Project changes (version 9)
-- `Wallpaper` gains `rollStartsAtPattern: boolean`. Version 8 projects are migrated with `false`, so the calculation is the same as before. New wallpapers default to `false`. The checkbox is shown when the match isn't free and the repeat > 0.
+- `Wallpaper` gains `rollStartsAtPattern: boolean`. Version 8 projects are migrated with `false`, so the calculation is the same as before. New wallpapers were created with `false` at first; they now default to `true`, because most rolls start at a pattern start. The checkbox is shown when the match isn't free and the repeat > 0.
+
+### Project changes (versions 10 and 11)
+- Version 10 briefly let a cutting plan be arranged by hand (`Wallpaper.manualPlan`). That was removed again: plans are always calculated.
+- Version 11 has the same data as version 9. Version 10 projects are migrated by dropping `manualPlan`, and version 9 projects only get the new version number.
+
+### Project changes (version 12)
+- `WallpaperAssignment` gains `stripExtra: Record<string, number | null>`: keys are strip numbers as digits, values in mm, or null for a removed strip. Version 11 projects are migrated with `{}`, so every strip keeps its calculated length.
+
+### Project changes (version 13)
+- `Wallpaper` gains `manualPlan: string[][] | null` again, this time followed as far as it still matches. Version 12 projects are migrated with `null` (automatic). Validation: null, or an array of arrays of strings.
 
 ### Not in Part 3 (later)
 Where the first strip starts (left / right / centred on a feature), tiles, reusing narrow leftover widths, joining two pieces to make one strip.

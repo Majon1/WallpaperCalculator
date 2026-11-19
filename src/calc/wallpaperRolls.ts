@@ -15,8 +15,10 @@ export interface Piece {
   /** Height range on the wall that the piece covers (without trim). */
   from: number;
   to: number;
-  /** Piece length + 2 × trim. */
+  /** Piece length + 2 × trim (+ the strip's length change by hand, on its top piece). */
   cutLength: number;
+  /** Length added by hand (`WallpaperAssignment.stripExtra`); 0 when as calculated. */
+  extra: number;
   /** Where in the pattern repeat the cut starts / ends, in [0, repeat). Always 0 for free match. */
   startPhase: number;
   endPhase: number;
@@ -34,10 +36,20 @@ export interface Roll {
   cuts: RollCut[];
   /** Sum of cut lengths and gaps. */
   used: number;
+  /** used > usable length: only possible in an arrangement made by hand. */
+  tooLong: boolean;
 }
 
 export interface WallpaperResult {
   wallpaperId: Id;
+  /** The plan follows an arrangement made by hand (`Wallpaper.manualPlan`). */
+  manual: boolean;
+  /**
+   * Differences between the hand-made arrangement and the current pieces: pieces it lists that no longer exist
+   * (dropped), and new pieces it doesn't list (placed automatically). `outdated`: nothing matched any more, so the
+   * plan was calculated automatically.
+   */
+  manualChanges: { dropped: number; added: number; outdated: boolean };
   rolls: number;
   /** rolls × price per roll; null when the price is unknown. */
   cost: number | null;
@@ -67,6 +79,9 @@ export interface ProjectResult {
 export const SEARCH_STEPS = 200_000;
 
 const EPS = 1e-6;
+
+/** Shortest piece that can be cut, also when a strip is shortened by hand. */
+export const MIN_CUT = 10;
 
 /** x mod r in [0, r), with values within EPS of r snapped to 0. */
 function mod(x: number, r: number): number {
@@ -105,9 +120,16 @@ export function collectPieces(project: Project, wallpaper: Wallpaper): { pieces:
         continue;
       }
       for (const st of plan) {
-        const origin = a.startHeight + (wallpaper.match === 'offset' && st.index % 2 === 1 ? R / 2 : 0);
-        for (const pc of st.pieces) {
-          const cutLength = pc.to - pc.from + 2 * t;
+        // The pattern starts at the bottom of the cut: one trim below where the paper starts on the wall
+        // (so a floor strip starts right at a pattern start on the roll), half a repeat higher on odd half-drop strips.
+        const origin = a.startHeight - t + (wallpaper.match === 'offset' && st.index % 2 === 1 ? R / 2 : 0);
+        // A strip removed by hand gets no paper; a length changed by hand goes on its top piece (at the ceiling).
+        const edit = a.stripExtra[String(st.index)];
+        if (edit === null) continue;
+        const extra = edit ?? 0;
+        for (const [k, pc] of st.pieces.entries()) {
+          const own = k === st.pieces.length - 1 ? extra : 0;
+          const cutLength = Math.max(MIN_CUT, pc.to - pc.from + 2 * t + own);
           const startPhase = R > 0 ? mod(pc.from - t - origin, R) : 0;
           pieces.push({
             roomId: room.id,
@@ -116,6 +138,7 @@ export function collectPieces(project: Project, wallpaper: Wallpaper): { pieces:
             from: pc.from,
             to: pc.to,
             cutLength,
+            extra: own,
             startPhase,
             endPhase: R > 0 ? mod(startPhase + cutLength, R) : 0,
           });
@@ -125,6 +148,10 @@ export function collectPieces(project: Project, wallpaper: Wallpaper): { pieces:
   }
   return { pieces, problems };
 }
+
+/** Identifies a piece across recalculations: room, wall, strip and the bottom of the piece (to the mm). */
+export const pieceKey = (p: Pick<Piece, 'roomId' | 'wallIndex' | 'stripIndex' | 'from'>): string =>
+  `${p.roomId}:${p.wallIndex}:${p.stripIndex}:${Math.round(p.from)}`;
 
 /** Waste between a cut ending at phase `end` and the next one starting at phase `start`. */
 export function gapBetween(end: number, start: number, repeat: number): number {
@@ -337,8 +364,8 @@ export function packRolls(
   return best;
 }
 
-/** Rounds of moving / swapping pieces when balancing (each round makes one improvement). */
-const BALANCE_ROUNDS = 500;
+/** Rounds of moving / swapping pieces when gathering the spare paper (each round makes one improvement). */
+const GATHER_ROUNDS = 500;
 
 /** Rebuild a cutting order for a set of pieces by inserting them one by one (longest first) at the best position. */
 function orderFor(set: number[], pieces: Piece[], repeat: number, rollStart: RollStart): RollState {
@@ -352,12 +379,13 @@ function orderFor(set: number[], pieces: Piece[], repeat: number, rollStart: Rol
 }
 
 /**
- * Step 4: with the number of rolls fixed, spread the spare paper so that no roll is cut to the last centimetre.
- * Repeatedly takes the fullest roll and tries moving one of its pieces to another roll, or swapping one of its
- * pieces with one from another roll. A change is kept when every roll still fits and the fullest roll becomes
- * less full (or, if that stays the same, the rolls become more even: smaller sum of squared lengths used).
+ * Step 4: with the number of rolls fixed, gather the spare paper on one roll, so that what's left over is one long
+ * piece (useful for an extra strip) rather than short ends on every roll.
+ * Repeatedly takes the roll with the most spare paper and tries moving one of its pieces to another roll, or
+ * swapping one of its pieces with one from another roll (each changed roll is re-ordered for the least waste). The change that makes the **largest leftover** biggest is kept, provided every
+ * roll still fits; on a tie, the one that uses the least paper in total. Stops when nothing improves.
  */
-export function balanceRolls(
+export function gatherLeftover(
   orders: number[][],
   pieces: Piece[],
   usable: number,
@@ -367,44 +395,44 @@ export function balanceRolls(
   if (orders.length < 2) return orders;
   let rolls: RollState[] = orders.map((o) => ({ order: [...o], used: lengthUsed(o, pieces, repeat, rollStart) }));
   const score = (rs: RollState[]) => ({
-    max: Math.max(...rs.map((r) => r.used)),
-    squares: rs.reduce((sum, r) => sum + r.used * r.used, 0),
+    largest: Math.max(...rs.map((r) => usable - r.used)),
+    total: rs.reduce((sum, r) => sum + r.used, 0),
   });
   const better = (a: ReturnType<typeof score>, b: ReturnType<typeof score>) =>
-    a.max < b.max - EPS || (Math.abs(a.max - b.max) <= EPS && a.squares < b.squares - 1);
+    a.largest > b.largest + EPS || (Math.abs(a.largest - b.largest) <= EPS && a.total < b.total - EPS);
 
-  for (let round = 0; round < BALANCE_ROUNDS; round++) {
-    const current = score(rolls);
-    const f = rolls.reduce((best, r, i) => (r.used > rolls[best].used + EPS ? i : best), 0);
+  for (let round = 0; round < GATHER_ROUNDS; round++) {
     let bestRolls: RollState[] | null = null;
-    let bestScore = current;
-    const consider = (g: number, newF: RollState, newG: RollState) => {
-      if (newF.used > usable + EPS || newG.used > usable + EPS) return;
-      const next = rolls.map((r, i) => (i === f ? newF : i === g ? newG : r));
+    let bestScore = score(rolls);
+    const consider = (a: number, newA: RollState, b: number, newB: RollState) => {
+      if (newA.used > usable + EPS || newB.used > usable + EPS) return;
+      if (newA.order.length === 0 || newB.order.length === 0) return; // never empty a roll here (that's packing's job)
+      const next = rolls.map((r, i) => (i === a ? newA : i === b ? newB : r));
       const sc = score(next);
       if (better(sc, bestScore)) {
         bestScore = sc;
         bestRolls = next;
       }
     };
-    const fullest = rolls[f].order;
-    for (let g = 0; g < rolls.length; g++) {
-      if (g === f) continue;
-      for (const p of fullest) {
-        const rest = fullest.filter((x) => x !== p);
-        if (rest.length > 0) {
-          // move p from the fullest roll to roll g
-          const fit = insertionCost(rolls[g].order, rolls[g].used, p, pieces, repeat, rollStart);
-          consider(g, orderFor(rest, pieces, repeat, rollStart), insertInto(rolls[g], fit.pos, p, fit.used));
-        }
-        // swap p with each piece q of roll g
-        for (const q of rolls[g].order) {
-          if (pieces[q].cutLength >= pieces[p].cutLength - EPS && repeat === 0) continue; // can't help without a pattern
-          consider(
-            g,
-            orderFor([...rest, q], pieces, repeat, rollStart),
-            orderFor([...rolls[g].order.filter((x) => x !== q), p], pieces, repeat, rollStart),
-          );
+    // Only changes involving the roll with the most spare paper (the one being emptied) can make it bigger.
+    const a = rolls.reduce((best, r, i) => (r.used < rolls[best].used - EPS ? i : best), 0);
+    {
+      for (let b = 0; b < rolls.length; b++) {
+        if (a === b) continue;
+        for (const p of rolls[a].order) {
+          const restA = rolls[a].order.filter((x) => x !== p);
+          // move p from the emptiest roll to roll b
+          const fit = insertionCost(rolls[b].order, rolls[b].used, p, pieces, repeat, rollStart);
+          consider(a, orderFor(restA, pieces, repeat, rollStart), b, insertInto(rolls[b], fit.pos, p, fit.used));
+          // swap p (emptiest roll) with q (roll b)
+          for (const q of rolls[b].order) {
+            consider(
+              a,
+              orderFor([...restA, q], pieces, repeat, rollStart),
+              b,
+              orderFor([...rolls[b].order.filter((x) => x !== q), p], pieces, repeat, rollStart),
+            );
+          }
         }
       }
     }
@@ -412,6 +440,64 @@ export function balanceRolls(
     rolls = bestRolls;
   }
   return rolls.map((r) => r.order);
+}
+
+/**
+ * Follow an arrangement made by hand (rolls of piece keys) as closely as the current pieces allow:
+ * - keys of pieces that no longer exist (or listed twice) are dropped;
+ * - pieces the arrangement doesn't list (new, e.g. after changing a wall) are added where they add the least
+ *   waste and still fit, else on a new roll;
+ * - empty rolls are dropped.
+ * Returns null when not a single key matches (then the plan is calculated automatically).
+ */
+export function applyManualPlan(
+  plan: string[][],
+  pieces: Piece[],
+  usable: number,
+  repeat: number,
+  rollStart: RollStart = null,
+): { orders: number[][]; dropped: number; added: number } | null {
+  const index = new Map<string, number>();
+  pieces.forEach((p, i) => {
+    if (!index.has(pieceKey(p))) index.set(pieceKey(p), i);
+  });
+  const placed = new Set<number>();
+  let dropped = 0;
+  const rolls: RollState[] = [];
+  for (const roll of plan) {
+    const order: number[] = [];
+    for (const key of roll) {
+      const i = index.get(key);
+      if (i === undefined || placed.has(i)) {
+        dropped++;
+        continue;
+      }
+      placed.add(i);
+      order.push(i);
+    }
+    if (order.length > 0) rolls.push({ order, used: lengthUsed(order, pieces, repeat, rollStart) });
+  }
+  if (placed.size === 0) return null;
+  const missing = pieces.map((_, i) => i).filter((i) => !placed.has(i));
+  missing.sort((a, b) => pieces[b].cutLength - pieces[a].cutLength || a - b);
+  for (const i of missing) {
+    let best = -1;
+    let bestFit = { pos: 0, used: 0 };
+    let bestWaste = Infinity;
+    rolls.forEach((roll, r) => {
+      const fit = insertionCost(roll.order, roll.used, i, pieces, repeat, rollStart);
+      if (fit.used > usable + EPS) return;
+      const waste = fit.used - roll.used - pieces[i].cutLength;
+      if (waste < bestWaste - EPS) {
+        bestWaste = waste;
+        best = r;
+        bestFit = fit;
+      }
+    });
+    if (best >= 0) rolls[best] = insertInto(rolls[best], bestFit.pos, i, bestFit.used);
+    else rolls.push({ order: [i], used: pieces[i].cutLength + firstGap(pieces[i], repeat, rollStart) });
+  }
+  return { orders: rolls.map((r) => r.order), dropped, added: missing.length };
 }
 
 /** The full calculation for one wallpaper. */
@@ -433,21 +519,37 @@ export function calcWallpaper(project: Project, wallpaper: Wallpaper, maxSteps =
     }
   });
   const fitting = fits.map((i) => pieces[i]);
-  // Fewest rolls first, then spread the spare paper over them.
-  const orders = balanceRolls(packRolls(fitting, usableLength, repeat, maxSteps, rollStart), fitting, usableLength, repeat, rollStart);
+  // An arrangement made by hand is followed (as far as it still matches the pieces).
+  const manualResult = wallpaper.manualPlan
+    ? applyManualPlan(wallpaper.manualPlan, fitting, usableLength, repeat, rollStart)
+    : null;
+  // Otherwise: fewest rolls first, then gather the spare paper on one roll (one long leftover beats short ends).
+  const orders =
+    manualResult?.orders ??
+    gatherLeftover(packRolls(fitting, usableLength, repeat, maxSteps, rollStart), fitting, usableLength, repeat, rollStart);
   const plan: Roll[] = orders.map((order) => ({
     cuts: order.map((j, k) => ({
       piece: fits[j],
       gapBefore: k === 0 ? firstGap(fitting[j], repeat, rollStart) : gapBetween(fitting[order[k - 1]].endPhase, fitting[j].startPhase, repeat),
     })),
     used: lengthUsed(order, fitting, repeat, rollStart),
+    tooLong: lengthUsed(order, fitting, repeat, rollStart) > usableLength + EPS,
   }));
+  plan.forEach((roll, r) => {
+    if (roll.tooLong) problems.push(`Roll ${r + 1} is ${Math.round(roll.used - usableLength) / 10} cm too short for its pieces.`);
+  });
   const paperUsed = plan.reduce((sum, r) => sum + r.used, 0);
   const area = project.wallpaperAssignments
     .filter((a) => a.wallpaperId === wallpaper.id)
     .reduce((sum, a) => sum + assignmentArea(project, a), 0);
   return {
     wallpaperId: wallpaper.id,
+    manual: manualResult !== null,
+    manualChanges: {
+      dropped: manualResult?.dropped ?? 0,
+      added: manualResult?.added ?? 0,
+      outdated: wallpaper.manualPlan !== null && manualResult === null,
+    },
     rolls: plan.length,
     cost: wallpaper.pricePerRoll === null ? null : plan.length * wallpaper.pricePerRoll,
     pieces,
